@@ -48,39 +48,53 @@ jobs:
       - name: Flutter test
         run: flutter test
 
-      - name: Build arm64 APK
-        run: flutter build apk --release --target-platform android-arm64
+      - name: Build ARM 32-bit and 64-bit APKs
+        run: flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64
 
-      - name: Verify APK
+      - name: Verify ARM APKs
         shell: bash
         run: |
           set -euo pipefail
-          APK="$(find build/app/outputs/flutter-apk -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          test -n "$APK"
-          unzip -l "$APK" > apk-list.txt
+          OUT="build/app/outputs/flutter-apk"
+          ARM32_APK="$OUT/app-armeabi-v7a-release.apk"
+          ARM64_APK="$OUT/app-arm64-v8a-release.apk"
+          test -s "$ARM32_APK"
+          test -s "$ARM64_APK"
 
-          if grep -E 'lib/(armeabi-v7a|x86|x86_64)/' apk-list.txt; then
-            echo "Unexpected non-arm64 native library found."
-            exit 1
-          fi
+          verify_apk() {
+            local apk="$1"
+            local expected_abi="$2"
+            local listing="$RUNNER_TEMP/apk-list-${expected_abi}.txt"
 
-          grep -q 'lib/arm64-v8a/' apk-list.txt
+            unzip -l "$apk" > "$listing"
+            if ! grep -Fq "lib/${expected_abi}/" "$listing"; then
+              echo "Expected native libraries for ${expected_abi} were not found in ${apk}."
+              exit 1
+            fi
 
-          if unzip -l "$APK" | grep -F 'rish_shizuku.dex'; then
-            echo "Forbidden rish_shizuku.dex found."
-            exit 1
-          fi
+            if grep -E 'lib/(armeabi-v7a|arm64-v8a|x86|x86_64)/' "$listing" | grep -Fv "lib/${expected_abi}/"; then
+              echo "Unexpected mixed-ABI native libraries found in ${apk}."
+              exit 1
+            fi
 
-          if unzip -l "$APK" | grep -Ei '(^|/)(rish|librish)(_|\.|/)' ; then
-            echo "Forbidden rish execution layer artifact found."
-            exit 1
-          fi
+            if unzip -Z1 "$apk" | grep -F 'rish_shizuku.dex'; then
+              echo "Forbidden rish_shizuku.dex found in ${apk}."
+              exit 1
+            fi
 
-          if command -v aapt >/dev/null 2>&1; then
-            aapt dump badging "$APK" | sed -n '1,5p'
-          fi
+            if unzip -Z1 "$apk" | grep -Ei '(^|/)(rish|librish)(_|\.|/)'; then
+              echo "Forbidden rish execution layer artifact found in ${apk}."
+              exit 1
+            fi
 
-          sha256sum "$APK" | tee apk.sha256
+            if command -v aapt >/dev/null 2>&1; then
+              aapt dump badging "$apk" | sed -n '1,5p'
+            fi
+          }
+
+          verify_apk "$ARM32_APK" "armeabi-v7a"
+          verify_apk "$ARM64_APK" "arm64-v8a"
+          sha256sum "$ARM32_APK" "$ARM64_APK" | tee apk.sha256
 
       - name: Package full Flutter project
         run: |
@@ -89,12 +103,22 @@ jobs:
           rsync -a --exclude='.git/' --exclude='build/' --exclude='.dart_tool/' ./ release-package/
           (cd release-package && zip -qr ../commands-flutter-project.zip .)
 
+      - name: Upload armeabi-v7a 32-bit APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: commands-armeabi-v7a-32bit-apk
+          path: |
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            apk.sha256
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload arm64 APK
         uses: actions/upload-artifact@v7
         with:
           name: commands-arm64-apk
           path: |
-            build/app/outputs/flutter-apk/*.apk
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
             apk.sha256
           if-no-files-found: error
           retention-days: 14
