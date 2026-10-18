@@ -214,6 +214,21 @@ class _CommandsPageState extends State<CommandsPage> {
     }
   }
 
+  void _openSettingsPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _SettingsPage(
+          isAuthorized: () => authorized,
+          currentStatus: () => status,
+          canGrantPermission: () => installed && shizukuRunning && !permission,
+          onRefresh: refreshStatus,
+          onRequestPermission: requestPermission,
+          onOpenSection: _openSettingsSection,
+        ),
+      ),
+    );
+  }
+
   Future<void> _openSettingsSection(_SettingsSection section) async {
     if (!authorized) {
       showMessage('Shizuku must be running and authorized first.');
@@ -229,36 +244,6 @@ class _CommandsPageState extends State<CommandsPage> {
     );
   }
 
-  Widget _sectionButton(_SettingsSection section) {
-    return OutlinedButton(
-      onPressed: authorized ? () => _openSettingsSection(section) : null,
-      style: OutlinedButton.styleFrom(
-        foregroundColor: Colors.white,
-        disabledForegroundColor: Colors.white38,
-        side: const BorderSide(color: Colors.white),
-        padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 14),
-        alignment: Alignment.centerLeft,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              section.title,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          const Icon(Icons.chevron_right, color: Colors.white),
-        ],
-      ),
-    );
-  }
-
   Future<void> saveOutput() async {
     try {
       final raw = await channel.invokeMethod<Map<dynamic, dynamic>>(
@@ -266,10 +251,11 @@ class _CommandsPageState extends State<CommandsPage> {
         <String, dynamic>{'content': terminalText},
       );
       final data = Map<String, dynamic>.from(raw ?? const {});
+      final filename = data['filename'] as String? ?? 'commands file';
       if (!mounted) return;
       showMessage(
         data['success'] == true
-            ? 'Saved as commands.txt in Downloads.'
+            ? 'Saved as $filename in Downloads.'
             : 'Save failed.',
       );
     } on PlatformException catch (e) {
@@ -292,33 +278,261 @@ class _CommandsPageState extends State<CommandsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text('Commands'),
-        actions: [
-          IconButton(
-            onPressed: refreshStatus,
-            tooltip: 'Refresh',
-            icon: const Icon(Icons.refresh, color: Colors.white),
-          ),
-        ],
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: saveOutput,
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        shape: RoundedRectangleBorder(
-          side: const BorderSide(color: Colors.white),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        icon: const Icon(Icons.save_outlined),
-        label: const Text('Save Output'),
+        title: const Text('Commands', style: TextStyle(color: Colors.white)),
       ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 110),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+      body: RefreshIndicator(
+        onRefresh: refreshStatus,
+        color: Colors.white,
+        backgroundColor: Colors.black,
+        child: SafeArea(
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (!authorized) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      border: Border.all(color: Colors.white),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.terminal, color: Colors.white),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            status,
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                        ),
+                        if (installed && shizukuRunning && !permission)
+                          OutlinedButton(
+                            onPressed: requestPermission,
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              disabledForegroundColor: Colors.white,
+                              side: const BorderSide(color: Colors.white),
+                            ),
+                            child: const Text('Grant', style: TextStyle(color: Colors.white)),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                ],
+                OutlinedButton.icon(
+                  onPressed: _openSettingsPage,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white),
+                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                  ),
+                  icon: const Icon(Icons.settings_outlined, color: Colors.white),
+                  label: const Text(
+                    'System settings',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const Divider(color: Colors.white24, height: 1),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Shell command',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    const Icon(Icons.terminal, color: Colors.white, size: 19),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: commandController,
+                  enabled: authorized && !running,
+                  minLines: 1,
+                  maxLines: 5,
+                  keyboardType: TextInputType.multiline,
+                  style: const TextStyle(color: Colors.white, fontFamily: 'monospace'),
+                  decoration: const InputDecoration(
+                    hintText: 'Enter a shell command',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: OutlinedButton.icon(
+                    onPressed: authorized && !running ? runCommand : null,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      disabledForegroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.white),
+                    ),
+                    icon: running
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.play_arrow, color: Colors.white),
+                    label: Text(running ? 'Running...' : 'Run'),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                const Divider(color: Colors.white24, height: 1),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Output',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      terminalText.isEmpty ? Icons.article_outlined : Icons.article,
+                      color: Colors.white,
+                      size: 19,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                SizedBox(
+                  height: 260,
+                  child: Scrollbar(
+                    controller: outputController,
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      controller: outputController,
+                      child: SelectionArea(
+                        child: Align(
+                          alignment: Alignment.topLeft,
+                          child: Text(
+                            terminalText,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontFamily: 'monospace',
+                              fontSize: 13,
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: saveOutput,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  icon: const Icon(Icons.save_outlined, color: Colors.white),
+                  label: const Text('Save Output', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsPage extends StatefulWidget {
+  const _SettingsPage({
+    required this.isAuthorized,
+    required this.currentStatus,
+    required this.canGrantPermission,
+    required this.onRefresh,
+    required this.onRequestPermission,
+    required this.onOpenSection,
+  });
+
+  final bool Function() isAuthorized;
+  final String Function() currentStatus;
+  final bool Function() canGrantPermission;
+  final Future<void> Function() onRefresh;
+  final Future<void> Function() onRequestPermission;
+  final Future<void> Function(_SettingsSection) onOpenSection;
+
+  @override
+  State<_SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<_SettingsPage> {
+  Future<void> _refresh() async {
+    await widget.onRefresh();
+    if (mounted) setState(() {});
+  }
+
+  Widget _sectionButton(_SettingsSection section) {
+    final authorized = widget.isAuthorized();
+    return OutlinedButton(
+      onPressed: authorized ? () => widget.onOpenSection(section) : null,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.white,
+        disabledForegroundColor: Colors.white,
+        side: const BorderSide(color: Colors.white),
+        padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 14),
+        alignment: Alignment.centerLeft,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              section.title,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+            ),
+          ),
+          const Icon(Icons.chevron_right, color: Colors.white),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final authorized = widget.isAuthorized();
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: const Text('Settings', style: TextStyle(color: Colors.white)),
+      ),
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        color: Colors.white,
+        backgroundColor: Colors.black,
+        child: SafeArea(
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
             children: [
               if (!authorized) ...[
                 Container(
@@ -328,48 +542,37 @@ class _CommandsPageState extends State<CommandsPage> {
                     border: Border.all(color: Colors.white),
                   ),
                   child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Icon(Icons.terminal, color: Colors.white),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          status,
+                          widget.currentStatus(),
                           style: const TextStyle(color: Colors.white),
                         ),
                       ),
-                      if (installed && shizukuRunning && !permission)
+                      if (widget.canGrantPermission())
                         OutlinedButton(
-                          onPressed: requestPermission,
+                          onPressed: () async {
+                            await widget.onRequestPermission();
+                            if (mounted) setState(() {});
+                          },
                           style: OutlinedButton.styleFrom(
                             foregroundColor: Colors.white,
+                            disabledForegroundColor: Colors.white,
                             side: const BorderSide(color: Colors.white),
                           ),
-                          child: const Text('Grant'),
+                          child: const Text('Grant', style: TextStyle(color: Colors.white)),
                         ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 18),
               ],
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Settings',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  if (authorized)
-                    const Icon(
-                      Icons.check_circle_outline,
-                      color: Colors.white,
-                      size: 19,
-                    ),
-                ],
+              const Text(
+                'System settings',
+                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 10),
               _sectionButton(_SettingsSection.system),
@@ -379,116 +582,6 @@ class _CommandsPageState extends State<CommandsPage> {
               _sectionButton(_SettingsSection.secure),
               const SizedBox(height: 8),
               _sectionButton(_SettingsSection.prop),
-              const SizedBox(height: 18),
-              const Divider(color: Colors.white24, height: 1),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Shell command',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  const Icon(
-                    Icons.terminal,
-                    color: Colors.white,
-                    size: 19,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: commandController,
-                enabled: authorized && !running,
-                minLines: 1,
-                maxLines: 5,
-                keyboardType: TextInputType.multiline,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontFamily: 'monospace',
-                ),
-                decoration: const InputDecoration(
-                  hintText: 'Enter a shell command',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.centerRight,
-                child: OutlinedButton.icon(
-                  onPressed: authorized && !running ? runCommand : null,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    disabledForegroundColor: Colors.white38,
-                    side: const BorderSide(color: Colors.white),
-                  ),
-                  icon: running
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.play_arrow, color: Colors.white),
-                  label: Text(running ? 'Running...' : 'Run'),
-                ),
-              ),
-              const SizedBox(height: 14),
-              const Divider(color: Colors.white24, height: 1),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Output',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  Icon(
-                    terminalText.isEmpty
-                        ? Icons.article_outlined
-                        : Icons.article,
-                    color: Colors.white,
-                    size: 19,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              SizedBox(
-                height: 260,
-                child: Scrollbar(
-                  controller: outputController,
-                  thumbVisibility: true,
-                  child: SingleChildScrollView(
-                    controller: outputController,
-                    child: SelectionArea(
-                      child: Align(
-                        alignment: Alignment.topLeft,
-                        child: Text(
-                          terminalText,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontFamily: 'monospace',
-                            fontSize: 13,
-                            height: 1.35,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
             ],
           ),
         ),
