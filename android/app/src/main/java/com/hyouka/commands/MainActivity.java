@@ -33,14 +33,12 @@ public final class MainActivity extends FlutterActivity {
     private static final int REQUEST_CODE = 4401;
     private static final String SHIZUKU_PACKAGE = "moe.shizuku.privileged.api";
 
-    private final ExecutorService executor = Executors.newCachedThreadPool();
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ArrayDeque<Runnable> pendingActions = new ArrayDeque<>();
+    private final Object saveLock = new Object();
 
     private ICommandService userService;
     private boolean binding;
-    private MethodChannel.Result pendingCommandResult;
-    private String pendingCommand;
-    private long pendingTimeout;
     private MethodChannel.Result pendingPermissionResult;
 
     private final Shizuku.OnRequestPermissionResultListener permissionListener =
@@ -192,22 +190,20 @@ public final class MainActivity extends FlutterActivity {
             return;
         }
 
-        pendingCommand = command;
-        pendingTimeout = Math.max(1000L, Math.min(timeoutMs, 120000L));
-        pendingCommandResult = result;
-
+        final long timeout = Math.max(1000L, Math.min(timeoutMs, 120000L));
         if (userService != null) {
-            executePending();
+            executeCommand(command, timeout, result);
             return;
         }
 
+        // Each pending call captures its own command, timeout and method-channel result.
+        // This prevents a second tap during service binding from replacing the first call.
+        pendingActions.addLast(() -> executeCommand(command, timeout, result));
         if (binding) {
             return;
         }
 
         binding = true;
-        pendingActions.add(this::executePending);
-
         try {
             Shizuku.UserServiceArgs args = new Shizuku.UserServiceArgs(
                     new ComponentName(getPackageName(), CommandUserService.class.getName())
@@ -220,28 +216,27 @@ public final class MainActivity extends FlutterActivity {
             Shizuku.bindUserService(args, connection);
         } catch (Throwable e) {
             binding = false;
-            pendingActions.clear();
-            pendingCommandResult = null;
-            result.error("USER_SERVICE_BIND_ERROR", messageOf(e), null);
+            userService = null;
+            while (!pendingActions.isEmpty()) {
+                pendingActions.removeFirst().run();
+            }
         }
     }
 
-    private void executePending() {
+    private void executeCommand(String command, long timeoutMs, MethodChannel.Result result) {
         final ICommandService service = userService;
-        final MethodChannel.Result result = pendingCommandResult;
-        final String command = pendingCommand;
-        final long timeout = pendingTimeout;
-
-        pendingCommandResult = null;
-        pendingCommand = null;
-
-        if (service == null || result == null || command == null) {
+        if (service == null) {
+            result.error(
+                    "USER_SERVICE_UNAVAILABLE",
+                    "Shizuku command service is not connected. Refresh the status and try again.",
+                    status()
+            );
             return;
         }
 
         executor.execute(() -> {
             try {
-                Bundle bundle = service.execute(command, timeout);
+                Bundle bundle = service.execute(command, timeoutMs);
                 Map<String, Object> output = new HashMap<>();
                 output.put("stdout", bundle.getString("stdout", ""));
                 output.put("stderr", bundle.getString("stderr", ""));
@@ -249,7 +244,9 @@ public final class MainActivity extends FlutterActivity {
                 output.put("timedOut", bundle.getBoolean("timedOut", false));
                 runOnUiThread(() -> result.success(output));
             } catch (RemoteException e) {
-                userService = null;
+                if (userService == service) {
+                    userService = null;
+                }
                 runOnUiThread(() ->
                         result.error("USER_SERVICE_EXECUTE_ERROR", messageOf(e), null));
             } catch (Throwable e) {
@@ -266,68 +263,86 @@ public final class MainActivity extends FlutterActivity {
         }
 
         executor.execute(() -> {
-            try {
+            synchronized (saveLock) {
                 ContentResolver resolver = getContentResolver();
-                String relativePath = Environment.DIRECTORY_DOWNLOADS + "/";
+                Uri uri = null;
+                try {
+                    String relativePath = Environment.DIRECTORY_DOWNLOADS + "/";
+                    int highestIndex = 0;
+                    String selection = MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ? AND "
+                            + MediaStore.MediaColumns.RELATIVE_PATH + "=?";
+                    String[] args = {"commands%.txt", relativePath};
 
-                String selection =
-                        MediaStore.MediaColumns.DISPLAY_NAME + "=? AND "
-                                + MediaStore.MediaColumns.RELATIVE_PATH + "=?";
-                String[] args = {"commands.txt", relativePath};
+                    try (android.database.Cursor cursor = resolver.query(
+                            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                            new String[]{MediaStore.MediaColumns.DISPLAY_NAME},
+                            selection,
+                            args,
+                            null
+                    )) {
+                        if (cursor != null) {
+                            while (cursor.moveToNext()) {
+                                String existingName = cursor.getString(0);
+                                if (existingName == null
+                                        || !existingName.startsWith("commands")
+                                        || !existingName.endsWith(".txt")) {
+                                    continue;
+                                }
 
-                try (android.database.Cursor cursor = resolver.query(
-                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                        new String[]{MediaStore.MediaColumns._ID},
-                        selection,
-                        args,
-                        null
-                )) {
-                    if (cursor != null) {
-                        while (cursor.moveToNext()) {
-                            long id = cursor.getLong(0);
-                            Uri oldUri = Uri.withAppendedPath(
-                                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                                    Long.toString(id)
-                            );
-                            resolver.delete(oldUri, null, null);
+                                String number = existingName.substring(
+                                        "commands".length(),
+                                        existingName.length() - ".txt".length()
+                                );
+                                try {
+                                    highestIndex = Math.max(highestIndex, Integer.parseInt(number));
+                                } catch (NumberFormatException ignored) {
+                                    // Ignore legacy or user-created names that aren't numbered.
+                                }
+                            }
                         }
                     }
-                }
 
-                ContentValues values = new ContentValues();
-                values.put(MediaStore.MediaColumns.DISPLAY_NAME, "commands.txt");
-                values.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
-                values.put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath);
-                values.put(MediaStore.MediaColumns.IS_PENDING, 1);
+                    String filename = "commands" + (highestIndex + 1) + ".txt";
+                    ContentValues values = new ContentValues();
+                    values.put(MediaStore.MediaColumns.DISPLAY_NAME, filename);
+                    values.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
+                    values.put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath);
+                    values.put(MediaStore.MediaColumns.IS_PENDING, 1);
 
-                Uri uri = resolver.insert(
-                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                        values
-                );
-                if (uri == null) {
-                    throw new IllegalStateException("MediaStore insert returned null.");
-                }
-
-                try (OutputStream output = resolver.openOutputStream(uri, "w")) {
-                    if (output == null) {
-                        throw new IllegalStateException("Unable to open commands.txt.");
+                    uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                    if (uri == null) {
+                        throw new IllegalStateException("MediaStore insert returned null.");
                     }
-                    output.write(content.getBytes(StandardCharsets.UTF_8));
-                    output.flush();
+
+                    try (OutputStream output = resolver.openOutputStream(uri, "w")) {
+                        if (output == null) {
+                            throw new IllegalStateException("Unable to open " + filename + ".");
+                        }
+                        output.write(content.getBytes(StandardCharsets.UTF_8));
+                        output.flush();
+                    }
+
+                    ContentValues publish = new ContentValues();
+                    publish.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                    if (resolver.update(uri, publish, null, null) < 1) {
+                        throw new IllegalStateException("Unable to publish " + filename + ".");
+                    }
+
+                    Map<String, Object> response = new HashMap<>();
+                    response.put("success", true);
+                    response.put("filename", filename);
+                    response.put("uri", uri.toString());
+                    runOnUiThread(() -> result.success(response));
+                } catch (Throwable e) {
+                    if (uri != null) {
+                        try {
+                            resolver.delete(uri, null, null);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                    String message = messageOf(e);
+                    runOnUiThread(() -> result.error("SAVE_OUTPUT_ERROR", message, null));
                 }
-
-                ContentValues publish = new ContentValues();
-                publish.put(MediaStore.MediaColumns.IS_PENDING, 0);
-                resolver.update(uri, publish, null, null);
-
-                Map<String, Object> response = new HashMap<>();
-                response.put("success", true);
-                response.put("filename", "commands.txt");
-                response.put("uri", uri.toString());
-                runOnUiThread(() -> result.success(response));
-            } catch (Throwable e) {
-                runOnUiThread(() ->
-                        result.error("SAVE_OUTPUT_ERROR", messageOf(e), null));
             }
         });
     }

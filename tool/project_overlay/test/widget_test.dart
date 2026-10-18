@@ -59,9 +59,20 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
-  testWidgets('renders settings sections without shizuku status',
-      (tester) async {
+  testWidgets('settings are on a separate page and text remains visible', (tester) async {
     await tester.pumpWidget(const CommandsApp());
+    await tester.pumpAndSettle();
+
+    expect(find.text('System settings'), findsOneWidget);
+    expect(find.byType(RefreshIndicator), findsOneWidget);
+    expect(find.text('Save Output'), findsOneWidget);
+    expect(find.text('System'), findsNothing);
+    expect(find.text('Global'), findsNothing);
+    expect(find.text('Secure'), findsNothing);
+    expect(find.text('Prop'), findsNothing);
+    expect(find.text('Shizuku is ready.'), findsNothing);
+
+    await tester.tap(find.text('System settings'));
     await tester.pumpAndSettle();
 
     expect(find.text('Settings'), findsOneWidget);
@@ -69,12 +80,14 @@ void main() {
     expect(find.text('Global'), findsOneWidget);
     expect(find.text('Secure'), findsOneWidget);
     expect(find.text('Prop'), findsOneWidget);
-    expect(find.text('Shizuku is ready.'), findsNothing);
   });
 
   testWidgets('System reads values and tapping a value opens editor',
       (tester) async {
     await tester.pumpWidget(const CommandsApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('System settings'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('System'));
@@ -93,6 +106,9 @@ void main() {
 
   testWidgets('settings sections provide searchable values', (tester) async {
     await tester.pumpWidget(const CommandsApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('System settings'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('System'));
