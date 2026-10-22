@@ -128,7 +128,7 @@ public final class CommandUserService extends ICommandService.Stub {
                 || !(trimmed.equals(prefix)
                         || (trimmed.startsWith(prefix)
                                 && trimmed.length() > prefix.length()
-                                && Character.isWhitespace(trimmed.charAt(prefix.length())))) {
+                                && Character.isWhitespace(trimmed.charAt(prefix.length()))))) {
             return null;
         }
 
