@@ -60,6 +60,18 @@ public final class CommandUserService extends ICommandService.Stub {
             result.putString("stderr", err.snapshot());
             result.putInt("exitCode", finished ? process.exitValue() : -1);
             result.putBoolean("timedOut", timedOut);
+
+            String fallbackCommand = mediaVolumeFallbackCommand(command, result);
+            if (fallbackCommand != null) {
+                Bundle fallbackResult = execute(fallbackCommand, timeout);
+                String note = "[Commands] The media utility is unavailable; retried with cmd media_session volume."
+                        + System.lineSeparator();
+                fallbackResult.putString(
+                        "stdout",
+                        note + fallbackResult.getString("stdout", "")
+                );
+                return fallbackResult;
+            }
             return result;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -78,6 +90,49 @@ public final class CommandUserService extends ICommandService.Stub {
                 process.destroy();
             }
         }
+    }
+
+    /**
+     * On Android builds without the standalone media shell binary, retry a simple
+     * "media volume ..." invocation through the platform's media_session shell command.
+     * Never rewrite compound scripts or commands that have shell operators/redirections.
+     */
+    private static String mediaVolumeFallbackCommand(String command, Bundle result) {
+        if (result.getInt("exitCode", -1) != 127) {
+            return null;
+        }
+
+        String stderr = result.getString("stderr", "");
+        String normalizedError = stderr == null ? "" : stderr.toLowerCase(java.util.Locale.ROOT);
+        if (!normalizedError.contains("media: inaccessible or not found")
+                && !normalizedError.contains("media: not found")) {
+            return null;
+        }
+
+        if (command == null) {
+            return null;
+        }
+
+        String trimmed = command.trim();
+        String prefix = "media volume";
+        if (trimmed.isEmpty()
+                || trimmed.indexOf(10) >= 0
+                || trimmed.indexOf(13) >= 0
+                || trimmed.contains(";")
+                || trimmed.contains("|")
+                || trimmed.contains("&")
+                || trimmed.indexOf(96) >= 0
+                || trimmed.contains("$")
+                || trimmed.contains(">")
+                || trimmed.contains("<")
+                || !(trimmed.equals(prefix)
+                        || (trimmed.startsWith(prefix)
+                                && trimmed.length() > prefix.length()
+                                && Character.isWhitespace(trimmed.charAt(prefix.length())))) {
+            return null;
+        }
+
+        return "cmd media_session volume" + trimmed.substring(prefix.length());
     }
 
     @Override
